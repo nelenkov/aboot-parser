@@ -14,6 +14,9 @@ from rsa import common, transform, core
 
 ABOOT_HEADER_LEN = 40
 
+SHA1_HASH_SIZE = 20
+SHA256_HASH_SIZE = 32
+
 class AbootHeader:
     def parse(self, aboot):
         (magic, version, null, img_base, img_size, code_size, img_base_code_size, sig_size, code_sig_offset, cert_size) = struct.unpack('< 10I', aboot[0:ABOOT_HEADER_LEN])
@@ -79,25 +82,28 @@ def frombits(bits):
 #OU=02 00XXXXXXXXXXXXXX HW_ID
 #OU=01 000000000000000X SW_ID
 class CertInfo:
-    device_ids = []     
+    control_fields = []     
     pub_key = None
     cert_len = 0
 
-    def get_id(self, id_name):
-        if not self.device_ids:
+    def get_control_field(self, cf_name):
+        if not self.control_fields:
             return None
 
-        for di in self.device_ids:
-            if id_name in di:
-                return binascii.unhexlify(di.split(' ')[1])
+        for cf in self.control_fields:
+            if cf_name in cf:
+                return binascii.unhexlify(cf.split(' ')[1])
 
         return None
 
     def get_sw_id(self):
-        return self.get_id('SW_ID')
+        return self.get_control_field('SW_ID')
 
     def get_hw_id(self):
-        return self.get_id('HW_ID')
+        return self.get_control_field('HW_ID')
+
+    def is_sha256(self):
+        return '\x00\x01' == self.get_control_field('SHA256')
 
 def parse_cert(raw_bytes):
     result = CertInfo()
@@ -110,10 +116,11 @@ def parse_cert(raw_bytes):
         for nv in rdn: 
             name = nv.getComponentByName('type')
             value = nv.getComponentByName('value')
-            if name == rfc2459.id_at_organizationalUnitName and ('_ID' in str(value)):
+            # could pick up regular OUs too
+            if name == rfc2459.id_at_organizationalUnitName:
                 #print 'name: %s' % name
                 #print 'value: [%s] (%s)' % (str(value).strip(), type(value))
-                result.device_ids.append(str(value).strip())
+                result.control_fields.append(str(value).strip())
 
     rsaType = rfc2437.RSAPublicKey();
     rsadata,rsadata_rest = decoder.decode(subj_pub_key_bytes, asn1Spec=rsaType)
@@ -152,12 +159,16 @@ def xor(key, pad):
 
     return str(result)
 
-# prob need to handle SHA-1 too...
-def calc_hash(aboot_base, hw_id, sw_id):
+def digest(data, is_sha256):
+    md = hashlib.sha256() if is_sha256 else hashlib.sha1()
+    md.update(data)
+    return md.digest()
+
+def calc_hash(aboot_base, hw_id, sw_id, is_sha256):
     o_pad = '\x5c' * 8
     i_pad = '\x36' * 8
 
-    h0 = hashlib.sha256(aboot_base).digest()
+    h0 = digest(aboot_base, is_sha256)
     #print 'H0:         %s' % h0.encode('hex')
 
     sw_id_ipad = xor(sw_id, i_pad)
@@ -169,19 +180,20 @@ def calc_hash(aboot_base, hw_id, sw_id):
     m1[0:len(sw_id_ipad)] = sw_id_ipad[:]
     m1[len(sw_id_ipad):] = h0[:]
     #print 'M1:         %s' % str(m1).encode('hex')
-    h1 = hashlib.sha256(m1).digest()
+    h1 = digest(m1, is_sha256)
     #print 'H1:         %s' % h1.encode('hex')
 
     m2 = bytearray(len(hw_id_opad) + len(h1))
     m2[0:len(hw_id_opad)] = hw_id_opad[:]
     m2[len(hw_id_opad):] = h1[:]
     #print 'M2:         %s' % str(m2).encode('hex')
-    h2 = hashlib.sha256(m2).digest()
+    h2 = digest(m2, is_sha256)
     #print 'H2:         %s (%d)' % (h2.encode('hex'), len(h2))
 
     return h2
 
-def extract_raw_hash(signature, pub_key):
+def extract_raw_hash(signature, pub_key, is_sha256):
+    hash_size = SHA256_HASH_SIZE if is_sha256 else SHA1_HASH_SIZE
     keylength = common.byte_size(pub_key.n)
     encrypted = transform.bytes2int(signature)
     decrypted = core.decrypt_int(encrypted, pub_key.e, pub_key.n)
@@ -195,13 +207,13 @@ def extract_raw_hash(signature, pub_key):
         raise Exception('Invalid signature format')
 
     padding = clearsig[2:null_idx]
-    if len(padding) != keylength - 2 - 1 - 32:
+    if len(padding) != keylength - 2 - 1 - hash_size:
         raise Exception('Invalid signature format')
     if not all(p == '\xff' for p in padding):
         raise Exception('Invalid signature format')
 
     raw_hash = clearsig[null_idx + 1:]
-    if len(raw_hash) != 32:
+    if len(raw_hash) != hash_size:
         raise Exception('Invalid signature format.')
 
     return raw_hash
@@ -251,7 +263,7 @@ if __name__ == '__main__':
     cert_infos = dump_all_certs(aboot, header, 'cert')
 
     # assume [0] is leaf/signing cert
-    expected_hash = extract_raw_hash(sig, cert_infos[0].pub_key)
+    expected_hash = extract_raw_hash(sig, cert_infos[0].pub_key, cert_infos[0].is_sha256())
     #print 'expected_hash %s' % expected_hash.encode('hex')
             
     print 'Trying to calculate image hash...'
@@ -262,7 +274,7 @@ if __name__ == '__main__':
 
     # both header and code are signed
     aboot_sig_target = aboot[0:ABOOT_HEADER_LEN + header.code_size]
-    my_hash = calc_hash(aboot_sig_target, hw_id, sw_id)
+    my_hash = calc_hash(aboot_sig_target, hw_id, sw_id, cert_infos[0].is_sha256())
 
     print 'Expected: %s (%d)' % (expected_hash.encode('hex'), len(expected_hash))
     print 'My hash:  %s (%d)' % (my_hash.encode('hex'), len(my_hash))
