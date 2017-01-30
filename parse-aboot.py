@@ -152,6 +152,7 @@ def xor(key, pad):
 
     return str(result)
 
+# prob need to handle SHA-1 too...
 def calc_hash(aboot_base, hw_id, sw_id):
     o_pad = '\x5c' * 8
     i_pad = '\x36' * 8
@@ -186,9 +187,24 @@ def extract_raw_hash(signature, pub_key):
     decrypted = core.decrypt_int(encrypted, pub_key.e, pub_key.n)
     clearsig = transform.int2bytes(decrypted, keylength)
     # unpad
-    raw_hash_idx = clearsig.find('\x00', 2) + 1
+    if (clearsig[0] != '\x00' or clearsig[1] != '\x01'):
+        raise Exception('Invalid signature format')
 
-    return clearsig[raw_hash_idx:]
+    raw_hash_idx = clearsig.find('\x00', 2) + 1
+    if raw_hash_idx < 0:
+        raise Exception('Invalid signature format')
+
+    padding = clearsig[2:raw_hash_idx - 1]
+    if len(padding) != keylength - 2 - 1 - 32:
+        raise Exception('Invalid signature format')
+    if not all(p == '\xff' for p in padding):
+        raise Exception('Invalid signature format')
+
+    raw_hash = clearsig[raw_hash_idx:]
+    if len(raw_hash) != 32:
+        raise Exception('Invalid signature format.')
+
+    return raw_hash
 
 def dump_all_certs(aboot, header, base_filename):
     cert_infos = []
