@@ -190,17 +190,17 @@ def extract_raw_hash(signature, pub_key):
     if (clearsig[0] != '\x00' or clearsig[1] != '\x01'):
         raise Exception('Invalid signature format')
 
-    raw_hash_idx = clearsig.find('\x00', 2) + 1
-    if raw_hash_idx < 0:
+    null_idx = clearsig.find('\x00', 2)
+    if null_idx < 0:
         raise Exception('Invalid signature format')
 
-    padding = clearsig[2:raw_hash_idx - 1]
+    padding = clearsig[2:null_idx]
     if len(padding) != keylength - 2 - 1 - 32:
         raise Exception('Invalid signature format')
     if not all(p == '\xff' for p in padding):
         raise Exception('Invalid signature format')
 
-    raw_hash = clearsig[raw_hash_idx:]
+    raw_hash = clearsig[null_idx + 1:]
     if len(raw_hash) != 32:
         raise Exception('Invalid signature format.')
 
