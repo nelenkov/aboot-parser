@@ -16,6 +16,9 @@ Tested on aboot from
  * Kyocera Brigadier 
  * Kyocera KC-S701
 
+Nexus 5X/6P use the ELF format, as described in QC whitepaper. 
+Currently unsupported by this script.
+
 Usage:
 
 ```
