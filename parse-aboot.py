@@ -13,6 +13,7 @@ import rsa
 from rsa import common, transform, core
 
 ABOOT_HEADER_LEN = 40
+ABOOT_MAGIC = '\x00\x00\x00\x05'
 
 SHA1_HASH_SIZE = 20
 SHA256_HASH_SIZE = 32
@@ -132,6 +133,7 @@ def parse_cert(raw_bytes):
 
 def dump_cert(aboot, cert_offset, filename):
     # DIY ASN.1
+    print aboot[cert_offset:cert_offset+10].encode('hex')
     if aboot[cert_offset] == '\x30' and aboot[cert_offset + 1] == '\x82':
         seq_len = struct.unpack('> H', aboot[cert_offset + 2:cert_offset + 4])[0]
         cert_len = seq_len + 4
@@ -224,6 +226,10 @@ def dump_all_certs(aboot, header, base_filename):
 
     cert_num = 1
     cert_size = 0
+    if cert_offset <= 0:
+        print 'No certificates found'
+        return cert_infos
+
     print 'Dumping all certificates...'
     while cert_offset < len(aboot):
         #print 'CertOffset:        0x%08x' % cert_offset
@@ -258,7 +264,15 @@ if __name__ == '__main__':
     header.parse(aboot)
     header.dump()
 
+    if header.magic != 0x5:
+        print 'Unrecognized format, magic=0x%04x' % header.magic
+        sys.exit(1)
+
     sig = dump_signature(aboot, header, 'signature.bin')
+
+    if (header.cert_size == 0):
+        print 'No embedded certifictes found or unknown format'
+        sys.exit(1)
 
     cert_infos = dump_all_certs(aboot, header, 'cert')
 
