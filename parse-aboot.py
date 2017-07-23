@@ -49,7 +49,7 @@ class AbootHeader:
         print
 
     def sig_offset(self):
-        return ABOOT_HEADER_LEN + header.code_size
+        return ABOOT_HEADER_LEN + self.code_size
 
     def cert_offset(self):
         return self.sig_offset()  + self.sig_size
